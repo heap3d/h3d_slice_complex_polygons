@@ -7,46 +7,72 @@
 # detect complex polygons
 
 from typing import Iterable, Optional
+from dataclasses import dataclass
 
 import lx
 import modo
 import modo.constants as c
 
-from h3d_utilites.scripts.h3d_utils import select_if_exists
+
+@dataclass
+class ComplexPolygon:
+    polygon: modo.MeshPolygon
+    complex_edges: list[modo.MeshEdge]
+    mesh: modo.Mesh
 
 
 def main():
-    meshes = get_seleted_meshes()
+    meshes = modo.Scene().selectedByType(itype=c.MESH_TYPE)
     if not meshes:
         print('No meshes selected')
         return
 
-    complex_polygons = []
+    complex_polygons_data = []
     for mesh in meshes:
-        complex_polygons.extend(get_complex_polygons(mesh))
+        complex_polygons_data.extend(get_complex_polygons(mesh))
 
-    if not complex_polygons:
+    if not complex_polygons_data:
         print('No complex polygons found')
         return
 
-    select_meshes_by_polygons(complex_polygons, meshes)
+    select_complex_components(complex_polygons_data)
 
 
-def get_seleted_meshes() -> list[modo.Mesh]:
-    return modo.Scene().selectedByType(itype=c.MESH_TYPE)
+def select_complex_components(complex_polygons: Iterable[ComplexPolygon]):
+    modo.Scene().deselect()
+    lx.eval('item.componentMode polygon true')
+    lx.eval('select.drop polygon')
+
+    for complex_polygon in complex_polygons:
+        complex_polygon.polygon.select()
+        complex_polygon.mesh.select()
+        for edge in complex_polygon.complex_edges:
+            edge.select()
 
 
-def get_complex_polygons(mesh: modo.Mesh) -> list[modo.MeshPolygon]:
+def get_complex_polygons(mesh: modo.Mesh) -> list[ComplexPolygon]:
     if not mesh:
         raise ValueError('Mesh is None')
 
     complex_edges = get_complex_edges(mesh)
 
-    complex_polygons = []
+    complex_polygons = set()
     for edge in complex_edges:
-        complex_polygons.extend(edge.polygons)
+        polygons = edge.polygons
+        if not polygons:
+            continue
+        complex_polygons.update(polygons)
 
-    return complex_polygons
+    complex_polygons_data = []
+    for polygon in complex_polygons:
+        complex_polygon = ComplexPolygon(
+            polygon=polygon,
+            complex_edges=[edge for edge in complex_edges if polygon in edge.polygons],
+            mesh=mesh
+        )
+        complex_polygons_data.append(complex_polygon)
+
+    return complex_polygons_data
 
 
 def get_complex_edges(mesh: modo.Mesh) -> list[modo.MeshEdge]:
@@ -108,22 +134,22 @@ def get_item_by_selected_polygons(meshes: Iterable[modo.Mesh]) -> list[modo.Mesh
     return selected_by_polys
 
 
-def select_meshes_by_polygons(polygons: Iterable[modo.MeshPolygon], meshes: Optional[Iterable[modo.Mesh]] = None):
-    if not polygons:
-        print('No polygons to select')
-        return
+# def select_meshes_by_polygons(polygons: Iterable[modo.MeshPolygon], meshes: Optional[Iterable[modo.Mesh]] = None):
+#     if not polygons:
+#         print('No polygons to select')
+#         return
 
-    if not meshes:
-        meshes = modo.Scene().selectedByType(itype=c.MESH_TYPE)
+#     if not meshes:
+#         meshes = modo.Scene().selectedByType(itype=c.MESH_TYPE)
 
-    lx.eval('item.componentMode polygon true')
-    lx.eval('select.drop polygon')
-    for polygon in polygons:
-        polygon.select()
+#     lx.eval('item.componentMode polygon true')
+#     lx.eval('select.drop polygon')
+#     for polygon in polygons:
+#         polygon.select()
 
-    modo.Scene().deselect()
-    complex_meshes = get_item_by_selected_polygons(meshes)
-    select_if_exists(complex_meshes)
+#     modo.Scene().deselect()
+#     complex_meshes = get_item_by_selected_polygons(meshes)
+#     select_if_exists(complex_meshes)
 
 
 def select_boundary_edges(mesh: modo.Mesh, polygons: Optional[Iterable[modo.MeshPolygon]]):
