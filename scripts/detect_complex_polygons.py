@@ -40,9 +40,7 @@ def get_complex_polygons(mesh: modo.Mesh) -> list[modo.MeshPolygon]:
     if not mesh:
         raise ValueError('Mesh is None')
 
-    one_polygon_edges = get_one_polygon_edges(mesh)
-    open_edges = get_open_edges(mesh)
-    complex_edges = set(one_polygon_edges) - set(open_edges)
+    complex_edges = get_complex_edges(mesh)
 
     complex_polygons = []
     for edge in complex_edges:
@@ -88,9 +86,7 @@ def get_open_edges(mesh: modo.Mesh) -> list[modo.MeshEdge]:
     if not mesh:
         raise ValueError('Mesh is None')
 
-    mesh.select(replace=True)
-    lx.eval('select.drop polygon')
-    lx.eval('script.run "macro.scriptservice:92663570022:macro"')
+    select_boundary_edges(mesh, None)
 
     geometry = mesh.geometry
     if not geometry:
@@ -128,6 +124,19 @@ def select_meshes_by_polygons(polygons: Iterable[modo.MeshPolygon], meshes: Opti
     modo.Scene().deselect()
     complex_meshes = get_item_by_selected_polygons(meshes)
     select_if_exists(complex_meshes)
+
+
+def select_boundary_edges(mesh: modo.Mesh, polygons: Optional[Iterable[modo.MeshPolygon]]):
+    if not mesh:
+        raise ValueError('Mesh is None')
+
+    mesh.select(replace=True)
+    lx.eval('select.drop polygon')
+    if polygons:
+        for polygon in polygons:
+            polygon.select()
+
+    lx.eval('script.run "macro.scriptservice:92663570022:macro"')
 
 
 if __name__ == '__main__':
