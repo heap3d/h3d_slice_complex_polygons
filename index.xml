@@ -2,6 +2,7 @@
 <package version="801">
 	<kit name="h3d_slice_complex_polygons" restart="YES">
 		<source target="h3d_slice_complex_polygons/index.cfg">index.cfg</source>
+		<source target="h3d_slice_complex_polygons/scripts/complex_polygons_tools.py">scripts/complex_polygons_tools.py</source>
 		<source target="h3d_slice_complex_polygons/scripts/detect_complex_polygons.py">scripts/detect_complex_polygons.py</source>
 	</kit>
 	<message button="Help">h3d_slice_complex_polygons Kit installation complete.</message>
