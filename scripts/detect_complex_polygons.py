@@ -9,26 +9,31 @@
 import modo
 import modo.constants as c
 
-from h3d_utilites.scripts.h3d_utils import drop_selection, set_selection_mode, select_if_exists, execution_time_alarm
+from h3d_utilites.scripts.h3d_utils import (
+    drop_selection,
+    set_selection_mode,
+    execution_time_alarm,
+    select_polygons,
+    select_if_exists,
+    remove_if_exist,
+    )
 
 from h3d_slice_complex_polygons.scripts.complex_polygons_tools import (
-    get_complex_geometry,
-    detect_edge_loops,
-    create_aligned_loc,
-    select_components,
+    ITEM_SEL,
+    POLYGON_SEL,
+    get_complex_polygons,
+    get_shadow_vertex_pairs,
+    slice_by_vertex_pair,
     get_containing_meshes,
-    get_open_edges_specified,
-    POLYGON,
-    EDGE,
     )
 
 from h3d_utilites.scripts.h3d_debug import (
     h3dd,
-    # execution_time,
-    # prints,
+    execution_time,
     )
 
 
+@execution_time
 @execution_time_alarm
 def main():
     meshes = modo.Scene().selectedByType(itype=c.MESH_TYPE)
@@ -36,32 +41,32 @@ def main():
         print('No meshes selected')
         return
 
-    complex_polygons: list[modo.MeshPolygon] = []
-    complex_edges: list[modo.MeshEdge] = []
+    complex_polygons_by_mesh: dict[modo.Mesh, list[modo.MeshPolygon]] = {}
     for mesh in meshes:
-        polygons, edges = get_complex_geometry(mesh)
-        complex_polygons.extend(polygons)
-        complex_edges.extend(edges)
+        polygons = get_complex_polygons(mesh)
+        complex_polygons_by_mesh[mesh] = polygons
 
-    if not complex_polygons:
-        print('No complex polygons found')
-        return
+    unsuccessful_polygons: list[modo.MeshPolygon] = []
+    tmp_items: set[modo.Item] = set()
+    for polygons in complex_polygons_by_mesh.values():
+        for polygon in polygons:
+            shadow_vertex_pairs, tmp_loc = get_shadow_vertex_pairs(polygon)
+            tmp_items.add(tmp_loc)
+            for shadow_vertex_pair in shadow_vertex_pairs:
+                is_successful = slice_by_vertex_pair(shadow_vertex_pair)
+                if is_successful:
+                    break
+            else:
+                unsuccessful_polygons.append(polygon)
 
-    boundary_edges = get_open_edges_specified(complex_polygons)
+    for tmp_item in tmp_items:
+        remove_if_exist(tmp_item, children=True)
 
-    edge_loops = detect_edge_loops(boundary_edges)
-    for edge_loop in edge_loops:
-        create_aligned_loc(EDGE, edge_loop)
-
-    select_if_exists(get_containing_meshes(complex_polygons))
-
-    set_selection_mode(POLYGON)
-    drop_selection(POLYGON)
-    select_components(complex_polygons)
-
-    drop_selection(EDGE)
-    for edge_loop in edge_loops:
-        select_components(edge_loop)
+    drop_selection(ITEM_SEL)
+    select_if_exists(get_containing_meshes(unsuccessful_polygons))
+    drop_selection(POLYGON_SEL)
+    set_selection_mode(POLYGON_SEL)
+    select_polygons(unsuccessful_polygons)
 
 
 if __name__ == '__main__':
