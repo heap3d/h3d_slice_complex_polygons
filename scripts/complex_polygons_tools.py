@@ -25,11 +25,16 @@ from h3d_utilites.scripts.h3d_utils import (
     select_components,
     select_polygons,
     select_vertices,
+    match_pos,
+    remove_if_exist,
     )
 
 from h3d_utilites.scripts.h3d_debug import (
     execution_time,
-    # h3dd,
+    h3dd,
+    prints,
+    fn_in,
+    fn_out,
     )
 
 
@@ -40,6 +45,7 @@ VERTEX_SEL = SELECTION_MODE.VERTEX.value
 
 
 VertexPair = tuple[MeshVertex, MeshVertex]
+VertexWorldCoords = dict[MeshVertex, Vector3]
 
 
 @dataclass
@@ -245,7 +251,7 @@ def get_containing_mesh(component: MeshComponent) -> Mesh:
 
 
 @execution_time
-def get_shadow_vertex_pairs(polygon: MeshPolygon) -> tuple[list[VertexPair], Item]:
+def get_shadow_vertex_pairs(polygon: MeshPolygon) -> tuple[list[VertexPair], VertexWorldCoords, Item]:
     tmp_loc = create_aligned_loc(POLYGON_SEL, (polygon,))
 
     drop_selection(ITEM_SEL)
@@ -273,10 +279,15 @@ def get_shadow_vertex_pairs(polygon: MeshPolygon) -> tuple[list[VertexPair], Ite
     if not loc_children:
         raise ValueError('Error creating tmp mesh')
 
+    shadow_vertex_world_coords: VertexWorldCoords = dict()
     for mesh in loc_children:
         geometry = mesh.geometry
         if not geometry:
             raise ValueError('Mesh item contains no geometry')
+
+        if not isinstance(mesh, Mesh):
+            raise ValueError('Locator child item is not a mesh')
+        shadow_vertex_world_coords.update(build_vertex_world_coords(mesh))
 
         bb_area[mesh] = get_bb_area((geometry.boundingBox))
 
@@ -286,39 +297,147 @@ def get_shadow_vertex_pairs(polygon: MeshPolygon) -> tuple[list[VertexPair], Ite
     lx.eval('item.editorColor red')
 
     boundary_loop = bb_area_sorted[0][0]
-    internal_loops = [bb_area[0] for bb_area in bb_area_sorted]
+    internal_loops = [bb_area[0] for bb_area in bb_area_sorted[1:]]
 
     shadow_vertex_pairs_distance: dict[VertexPair, float] = dict()
     for loop_mesh in internal_loops:
         for internal_vertex in loop_mesh.geometry.vertices:
             for boundary_vertex in boundary_loop.geometry.vertices:
-                pos_boundary = Vector3(boundary_vertex.position)
-                pos_internal = Vector3(internal_vertex.position)
-                distance = Vector3(pos_boundary-pos_internal).length()
+                pos_boundary = shadow_vertex_world_coords[boundary_vertex]
+                pos_internal = shadow_vertex_world_coords[internal_vertex]
+                distance = pos_boundary.distanceBetweenPoints(pos_internal)
 
                 shadow_vertex_pairs_distance[(boundary_vertex, internal_vertex)] = distance
 
     shadow_vertex_pairs_distance_sorted = sorted(list(shadow_vertex_pairs_distance.items()), key=lambda x: x[1])
     shadow_vertex_pairs = [vertex_pair[0] for vertex_pair in shadow_vertex_pairs_distance_sorted]
 
-    return shadow_vertex_pairs, tmp_loc
+    # TODO ***********************************************
+    # TODO exclude aready connected edge loops
+    # TODO ***********************************************
+    return shadow_vertex_pairs, shadow_vertex_world_coords, tmp_loc
 
 
-def slice_by_vertex_pair(shadow_vertex_pair: VertexPair, polygon: MeshPolygon) -> bool:
-    shadow_vector1 = Vector3(shadow_vertex_pair[0].position())
-    shadow_vector2 = Vector3(shadow_vertex_pair[1].position())
+def slice_by_vertex_pair(
+        polygon: MeshPolygon,
+        original_coords: VertexWorldCoords,
+        shadow_vertex_pair: VertexPair,
+        shadow_coords: VertexWorldCoords
+        ):
 
-    vertex1 = get_vertex_by_coords(polygon, shadow_vector1)
-    vertex2 = get_vertex_by_coords(polygon, shadow_vector2)
+    fn_in()
+
+    prints(polygon)
+    prints(original_coords)
+    prints(shadow_vertex_pair)
+    prints(shadow_coords)
+
+    vertex1 = get_matched_vertex(polygon, original_coords, shadow_vertex_pair[0], shadow_coords)
+    vertex2 = get_matched_vertex(polygon, original_coords, shadow_vertex_pair[1], shadow_coords)
 
     slice_polygon(polygon, (vertex1, vertex2))
 
-    return False
+    fn_out()
 
 
-def get_vertex_by_coords(polygon: MeshPolygon, position: Vector3) -> MeshVertex:
-    # lx.eval("select.channel {mesh004:wposMatrix@lmb=x} set")
-    ...
+@execution_time
+def build_vertex_world_coords(mesh: Mesh) -> VertexWorldCoords:
+    VERTEX_LOC_NAME = 'vertex loc'
+    PROBE_LOC_NAME = 'vertex loc'
+    CMGEOMETRYCONSTRAINT_CHANNEL = 'indexA'
+
+    vertex_loc: Item = modo.Scene().addItem(itype=c.LOCATOR_TYPE, name=VERTEX_LOC_NAME)
+    if not vertex_loc:
+        raise ValueError(f'{VERTEX_LOC_NAME} creation failed.')
+
+    probe_loc: Item = modo.Scene().addItem(itype=c.LOCATOR_TYPE, name=PROBE_LOC_NAME)
+    if not probe_loc:
+        raise ValueError(f'{PROBE_LOC_NAME} creation failed.')
+
+    constraint = add_vertex_constraint(vertex_loc, mesh)
+
+    channel = constraint.channel(CMGEOMETRYCONSTRAINT_CHANNEL)
+    if not channel:
+        raise ValueError(f'Channel {CMGEOMETRYCONSTRAINT_CHANNEL} not found for the constraint.')
+
+    geometry = mesh.geometry
+    if not geometry:
+        raise ValueError(f'Mesh <{mesh.name}> has no geometry')
+
+    vertices = geometry.vertices
+    if not vertices:
+        raise ValueError(f'Mesh <{mesh.name}> has no vertices')
+
+    vertex_world_coords: VertexWorldCoords = dict()
+    for vertex in vertices:
+        channel.set(vertex.index)
+        match_pos(probe_loc, vertex_loc)
+
+        vertex_world_coords[vertex] = Vector3(probe_loc.position.get())
+
+    remove_if_exist(vertex_loc, children=True)
+    remove_if_exist(probe_loc, children=True)
+    remove_constraint(constraint)
+
+    return vertex_world_coords
+
+
+def add_vertex_constraint(locator: Item, mesh: Mesh) -> Item:
+    locator.select(replace=True)
+    mesh.select()
+    lx.eval("constraintGeometry vert pos")
+
+    constraint: Item = modo.Scene().selectedByType(itype=c.CMGEOMETRYCONSTRAINT_TYPE)[0]
+    if not constraint:
+        raise ValueError('Constraint creation error.')
+
+    return constraint
+
+
+def remove_constraint(constraint: Item):
+    remove_if_exist(constraint, children=True)
+
+
+@execution_time
+def get_matched_vertex(
+        polygon: MeshPolygon,
+        original_coords: VertexWorldCoords,
+        shadow_vertex: MeshVertex,
+        shadow_coords: VertexWorldCoords,
+        ) -> MeshVertex:
+
+    DIST_THRESHOLD = 0.00001
+
+    fn_in()
+
+    prints(polygon)
+    prints(original_coords)
+    prints(shadow_vertex)
+    prints(shadow_coords)
+
+    polygon_vertices: list[MeshVertex] = polygon.vertices
+    prints(polygon_vertices)
+    matched_vertex = None
+    for polygon_vertex in polygon_vertices:
+        prints(polygon_vertex)
+        polygon_vertex_pos = original_coords[polygon_vertex]
+
+        prints(shadow_vertex, label='shadow_vertex')
+        prints(shadow_vertex.id, label='shadow_vertex_id')
+        for v in shadow_coords:
+            prints(v, label='shadow_coords_vertex')
+            prints(v.id, label='shadow_coords_vertex_id')
+
+        distance = polygon_vertex_pos.distanceBetweenPoints(shadow_coords[shadow_vertex])
+
+        if distance <= DIST_THRESHOLD:
+            matched_vertex = polygon_vertex
+
+    if not matched_vertex:
+        raise ValueError('No matched vertex found.')
+
+    fn_out()
+    return matched_vertex
 
 
 def slice_polygon(polygon: MeshPolygon, vertex_pair: VertexPair):
@@ -335,8 +454,15 @@ def slice_polygon(polygon: MeshPolygon, vertex_pair: VertexPair):
     drop_selection(VERTEX_SEL)
     select_vertices(vertex_pair)
 
+    # prints(vertex_pair)
+    h3dd.exit()
+
     lx.eval('poly.split')
 
 
 def is_polygon_complex(polygon: MeshPolygon) -> bool:
-    ...
+    mesh = get_containing_mesh(polygon)
+    if get_complex_edges(mesh):
+        return True
+
+    return False

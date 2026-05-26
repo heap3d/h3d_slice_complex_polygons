@@ -13,8 +13,8 @@ from h3d_utilites.scripts.h3d_utils import (
     drop_selection,
     set_selection_mode,
     execution_time_alarm,
-    select_polygons,
-    select_if_exists,
+    # select_polygons,
+    # select_if_exists,
     remove_if_exist,
     )
 
@@ -24,12 +24,14 @@ from h3d_slice_complex_polygons.scripts.complex_polygons_tools import (
     get_complex_polygons,
     get_shadow_vertex_pairs,
     slice_by_vertex_pair,
-    get_containing_meshes,
+    build_vertex_world_coords,
+    # get_containing_meshes,
     )
 
 from h3d_utilites.scripts.h3d_debug import (
     h3dd,
     execution_time,
+    # prints,
     )
 
 
@@ -41,32 +43,21 @@ def main():
         print('No meshes selected')
         return
 
-    complex_polygons_by_mesh: dict[modo.Mesh, list[modo.MeshPolygon]] = {}
     for mesh in meshes:
-        polygons = get_complex_polygons(mesh)
-        complex_polygons_by_mesh[mesh] = polygons
+        original_coords = build_vertex_world_coords(mesh)
+        while polygons := get_complex_polygons(mesh):
+            for polygon in polygons:
+                # prints(polygon)
+                # TODO exclude aready connected edge loops
+                shadow_vertex_pairs, shadow_coords, tmp_loc = get_shadow_vertex_pairs(polygon)
 
-    unsuccessful_polygons: list[modo.MeshPolygon] = []
-    tmp_items: set[modo.Item] = set()
-    for polygons in complex_polygons_by_mesh.values():
-        for polygon in polygons:
-            shadow_vertex_pairs, tmp_loc = get_shadow_vertex_pairs(polygon)
-            tmp_items.add(tmp_loc)
-            for shadow_vertex_pair in shadow_vertex_pairs:
-                is_successful = slice_by_vertex_pair(shadow_vertex_pair)
-                if is_successful:
-                    break
-            else:
-                unsuccessful_polygons.append(polygon)
+                slice_by_vertex_pair(polygon, original_coords, shadow_vertex_pairs[0], shadow_coords)
 
-    for tmp_item in tmp_items:
-        remove_if_exist(tmp_item, children=True)
+                remove_if_exist(tmp_loc, children=True)
 
     drop_selection(ITEM_SEL)
-    select_if_exists(get_containing_meshes(unsuccessful_polygons))
     drop_selection(POLYGON_SEL)
     set_selection_mode(POLYGON_SEL)
-    select_polygons(unsuccessful_polygons)
 
 
 if __name__ == '__main__':
